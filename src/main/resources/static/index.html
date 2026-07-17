@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能客服助手</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f5; height: 100vh; display: flex; flex-direction: column; }
+        .header { background: #1a1a2e; color: white; padding: 16px 24px; font-size: 18px; font-weight: 500; }
+        .chat-container { flex: 1; overflow-y: auto; padding: 20px; max-width: 800px; width: 100%; margin: 0 auto; }
+        .message { margin-bottom: 16px; display: flex; }
+        .message.user { justify-content: flex-end; }
+        .message .bubble { max-width: 70%; padding: 12px 16px; border-radius: 12px; line-height: 1.6; font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+        .message.user .bubble { background: #185FA5; color: white; border-bottom-right-radius: 4px; }
+        .message.assistant .bubble { background: white; color: #333; border-bottom-left-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+        .message.assistant .bubble.streaming::after { content: '|'; animation: blink 1s infinite; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+        .input-area { background: white; padding: 16px 24px; border-top: 1px solid #e0e0e0; }
+        .input-wrapper { max-width: 800px; margin: 0 auto; display: flex; gap: 12px; }
+        .input-wrapper input { flex: 1; padding: 12px 16px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; outline: none; }
+        .input-wrapper input:focus { border-color: #185FA5; }
+        .input-wrapper button { padding: 12px 24px; background: #185FA5; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
+        .input-wrapper button:hover { background: #0C447C; }
+        .input-wrapper button:disabled { background: #ccc; cursor: not-allowed; }
+        .mode-toggle { display: flex; gap: 8px; margin-bottom: 8px; max-width: 800px; margin: 0 auto 8px; }
+        .mode-toggle label { font-size: 13px; color: #666; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+        .suggestions { max-width: 800px; margin: 0 auto 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+        .suggestions span { font-size: 12px; color: #185FA5; background: #E6F1FB; padding: 4px 12px; border-radius: 12px; cursor: pointer; }
+        .suggestions span:hover { background: #B5D4F4; }
+    </style>
+</head>
+<body>
+    <div class="header">智能客服助手</div>
+    <div class="chat-container" id="chatContainer">
+        <div class="message assistant">
+            <div class="bubble">你好！我是电商智能客服助手，可以帮你查询订单、统计消费、查看销量等。试试问我："张三买了什么？"</div>
+        </div>
+    </div>
+    <div class="suggestions">
+        <span onclick="fillMessage('张三买了什么东西？')">张三买了什么？</span>
+        <span onclick="fillMessage('李四的总消费是多少？')">李四总消费</span>
+        <span onclick="fillMessage('哪个商品卖得最好？')">热销商品</span>
+    </div>
+    <div class="mode-toggle">
+        <label><input type="radio" name="mode" value="sync" checked> 同步对话</label>
+        <label><input type="radio" name="mode" value="stream"> 流式对话</label>
+    </div>
+    <div class="input-area">
+        <div class="input-wrapper">
+            <input type="text" id="messageInput" placeholder="输入消息..." onkeypress="if(event.key==='Enter') sendMessage()">
+            <button id="sendBtn" onclick="sendMessage()">发送</button>
+        </div>
+    </div>
+
+    <script>
+        const chatContainer = document.getElementById('chatContainer');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+
+        function fillMessage(text) {
+            messageInput.value = text;
+            messageInput.focus();
+        }
+
+        function getMode() {
+            return document.querySelector('input[name="mode"]:checked').value;
+        }
+
+        function addUserMessage(text) {
+            const div = document.createElement('div');
+            div.className = 'message user';
+            div.innerHTML = '<div class="bubble"></div>';
+            div.querySelector('.bubble').textContent = text;
+            chatContainer.appendChild(div);
+            scrollToBottom();
+        }
+
+        function addAssistantBubble() {
+            const div = document.createElement('div');
+            div.className = 'message assistant';
+            div.innerHTML = '<div class="bubble streaming"></div>';
+            chatContainer.appendChild(div);
+            scrollToBottom();
+            return div.querySelector('.bubble');
+        }
+
+        function scrollToBottom() {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            addUserMessage(message);
+            messageInput.value = '';
+            sendBtn.disabled = true;
+
+            const mode = getMode();
+            if (mode === 'stream') {
+                await sendStreamMessage(message);
+            } else {
+                await sendSyncMessage(message);
+            }
+            sendBtn.disabled = false;
+            messageInput.focus();
+        }
+
+        async function sendSyncMessage(message) {
+            const bubble = addAssistantBubble();
+            try {
+                const resp = await fetch('/api/chat?message=' + encodeURIComponent(message));
+                const json = await resp.json();
+                bubble.classList.remove('streaming');
+                bubble.textContent = json.data || json.message || '请求失败';
+            } catch (e) {
+                bubble.classList.remove('streaming');
+                bubble.textContent = '网络错误: ' + e.message;
+            }
+            scrollToBottom();
+        }
+
+        async function sendStreamMessage(message) {
+            const bubble = addAssistantBubble();
+            try {
+                const resp = await fetch('/api/chat/stream?message=' + encodeURIComponent(message));
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let text = '';
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    text += decoder.decode(value, { stream: true });
+                    // SSE 格式: data:xxx\n\n
+                    text = text.replace(/data:/g, '').replace(/\n\n/g, '');
+                    bubble.textContent = text;
+                    scrollToBottom();
+                }
+                bubble.classList.remove('streaming');
+            } catch (e) {
+                bubble.classList.remove('streaming');
+                bubble.textContent = '网络错误: ' + e.message;
+            }
+            scrollToBottom();
+        }
+    </script>
+</body>
+</html>
