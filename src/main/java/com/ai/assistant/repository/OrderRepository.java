@@ -34,6 +34,11 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     BigDecimal getTotalAmountByUsername(@Param("username") String username);
 
     /**
+     * 统计某用户的订单数（Spring Data 方法命名派生查询，自动生成 COUNT SQL）
+     */
+    long countByUsername(String username);
+
+    /**
      * 查询销量最高的商品（原生 SQL 查询）
      */
     @Query(value = "SELECT product, COUNT(*) as cnt FROM orders GROUP BY product ORDER BY cnt DESC LIMIT 1", nativeQuery = true)

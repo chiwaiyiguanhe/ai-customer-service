@@ -1,5 +1,8 @@
 package com.ai.assistant.service;
 
+import com.ai.assistant.dto.BestSellingProduct;
+import com.ai.assistant.dto.OrderSummary;
+import com.ai.assistant.dto.TotalSpent;
 import com.ai.assistant.model.Order;
 import com.ai.assistant.repository.OrderRepository;
 import dev.langchain4j.agent.tool.P;
@@ -12,12 +15,15 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * AI 工具集
  * 通过 @Tool 注解暴露给 LLM，LLM 会根据用户意图自动选择调用哪个工具
  * 这就是 Function Calling 机制
+ *
+ * 设计约定：工具返回结构化数据（record 经框架 Jackson 序列化为 JSON 回传给模型），
+ * 由模型基于原始数据组织回答语言，工具层不拼接任何"客服话术"。
+ * 好处：同一份工具数据可支撑无限种问法，模型可以对数据做二次推理（比较、排序、追问）。
  */
 @Component
 public class AssistantTools {
@@ -32,54 +38,48 @@ public class AssistantTools {
     }
 
     @Tool("根据用户名查询该用户的所有订单")
-    public String queryOrders(@P("用户名") String username) {
+    public List<OrderSummary> queryOrders(@P("用户名") String username) {
         log.info("调用工具: queryOrders(username={})", username);
-        List<Order> orders = orderRepository.findByUsername(username);
-        if (orders.isEmpty()) {
-            return "用户 " + username + " 暂无订单。";
-        }
-        return orders.stream()
-                .map(o -> o.getProduct() + " 价格：" + o.getAmount() + "元")
-                .collect(Collectors.joining("\n"));
+        return orderRepository.findByUsername(username).stream()
+                .map(AssistantTools::toSummary)
+                .toList();
     }
 
-    @Tool("查询用户的历史总消费金额")
-    public String queryTotalSpent(@P("用户名") String username) {
+    @Tool("查询用户的历史总消费金额及订单数")
+    public TotalSpent queryTotalSpent(@P("用户名") String username) {
         log.info("调用工具: queryTotalSpent(username={})", username);
         BigDecimal total = orderRepository.getTotalAmountByUsername(username);
-        if (total == null) {
-            return "用户 " + username + " 暂无消费记录";
-        }
-        return "用户 " + username + " 的历史总消费金额为：" + total + " 元";
+        long count = orderRepository.countByUsername(username);
+        // SUM 在无记录时返回 null，统一归零，让模型看到 0 而不是 null
+        return new TotalSpent(username, total == null ? BigDecimal.ZERO : total, count);
     }
 
     @Tool("查询用户在指定时间段内的订单，日期格式为 yyyy-MM-dd HH:mm:ss")
-    public String queryOrdersByDate(
+    public List<OrderSummary> queryOrdersByDate(
             @P("用户名") String username,
             @P("开始日期，格式 yyyy-MM-dd HH:mm:ss") String startDate,
             @P("结束日期，格式 yyyy-MM-dd HH:mm:ss") String endDate) {
         log.info("调用工具: queryOrdersByDate(username={}, start={}, end={})", username, startDate, endDate);
         LocalDateTime start = LocalDateTime.parse(startDate, FORMATTER);
         LocalDateTime end = LocalDateTime.parse(endDate, FORMATTER);
-        List<Order> orders = orderRepository.findByUsernameAndOrderTimeBetween(username, start, end);
-        if (orders.isEmpty()) {
-            return "用户 " + username + " 在 " + startDate + " 至 " + endDate + " 期间没有订单。";
-        }
-        return orders.stream()
-                .map(o -> o.getProduct() + " 价格：" + o.getAmount() + "元，时间：" + o.getOrderTime().format(FORMATTER))
-                .collect(Collectors.joining("\n"));
+        return orderRepository.findByUsernameAndOrderTimeBetween(username, start, end).stream()
+                .map(AssistantTools::toSummary)
+                .toList();
     }
 
     @Tool("查询销量最高的商品")
-    public String bestSellingProduct() {
+    public BestSellingProduct bestSellingProduct() {
         log.info("调用工具: bestSellingProduct()");
         List<Object[]> result = orderRepository.findBestSellingProduct();
         if (result.isEmpty()) {
-            return "暂无销售数据。";
+            // 无数据时返回空语义（product=null），由模型组织"暂无销售数据"的话术
+            return new BestSellingProduct(null, 0);
         }
         Object[] row = result.get(0);
-        String product = (String) row[0];
-        Long count = (Long) row[1];
-        return "目前销量最高的商品是：" + product + "，共售出 " + count + " 件。";
+        return new BestSellingProduct((String) row[0], (Long) row[1]);
+    }
+
+    private static OrderSummary toSummary(Order o) {
+        return new OrderSummary(o.getProduct(), o.getAmount(), o.getOrderTime().format(FORMATTER));
     }
 }
