@@ -31,12 +31,6 @@ public class AssistantTools {
         this.orderRepository = orderRepository;
     }
 
-    @Tool("查询指定城市的当前温度")
-    public double getTemperature(@P("城市名称") String city) {
-        log.info("调用工具: getTemperature(city={})", city);
-        return 22.5;
-    }
-
     @Tool("根据用户名查询该用户的所有订单")
     public String queryOrders(@P("用户名") String username) {
         log.info("调用工具: queryOrders(username={})", username);
