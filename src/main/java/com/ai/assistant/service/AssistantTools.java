@@ -1,7 +1,9 @@
 package com.ai.assistant.service;
 
+import com.ai.assistant.common.TimeParser;
 import com.ai.assistant.dto.BestSellingProduct;
 import com.ai.assistant.dto.OrderSummary;
+import com.ai.assistant.dto.OrdersByDateResult;
 import com.ai.assistant.dto.TotalSpent;
 import com.ai.assistant.model.Order;
 import com.ai.assistant.repository.OrderRepository;
@@ -54,17 +56,36 @@ public class AssistantTools {
         return new TotalSpent(username, total == null ? BigDecimal.ZERO : total, count);
     }
 
-    @Tool("查询用户在指定时间段内的订单，日期格式为 yyyy-MM-dd HH:mm:ss")
-    public List<OrderSummary> queryOrdersByDate(
+    // 两层防御：
+    // 第一层（预防）：@Tool/@P 描述明确写出支持的参数形式，工具描述本质是模型能看到的"文档"，
+    //                规则写在模型看得见的地方，从源头降低出错率；
+    // 第二层（兜底）：解析失败不抛异常中断会话，而是把"怎么改"的错误说明结构化回传给模型，
+    //                引导其修正参数重新调用（自愈闭环）。框架虽默认会把异常回传模型，但文案是
+    //                异常原始信息（英文堆栈片段），无引导性、不可控、不可测，故在应用层显式处理。
+    @Tool("查询用户在指定时间段内的订单，时间支持 yyyy-MM-dd HH:mm:ss 标准格式，或'昨天'、'最近一周'等相对表达")
+    public OrdersByDateResult queryOrdersByDate(
             @P("用户名") String username,
-            @P("开始日期，格式 yyyy-MM-dd HH:mm:ss") String startDate,
-            @P("结束日期，格式 yyyy-MM-dd HH:mm:ss") String endDate) {
+            @P("开始时间：yyyy-MM-dd HH:mm:ss 格式，也接受'昨天'、'最近一周'、'最近一个月'等相对表达") String startDate,
+            @P("结束时间：yyyy-MM-dd HH:mm:ss 格式，也接受'昨天'、'最近一周'、'最近一个月'等相对表达") String endDate) {
         log.info("调用工具: queryOrdersByDate(username={}, start={}, end={})", username, startDate, endDate);
-        LocalDateTime start = LocalDateTime.parse(startDate, FORMATTER);
-        LocalDateTime end = LocalDateTime.parse(endDate, FORMATTER);
-        return orderRepository.findByUsernameAndOrderTimeBetween(username, start, end).stream()
+        LocalDateTime start;
+        LocalDateTime end;
+        try {
+            LocalDateTime now = LocalDateTime.now();
+            start = TimeParser.parseStart(startDate, now);
+            end = TimeParser.parseEnd(endDate, now);
+        } catch (IllegalArgumentException e) {
+            log.warn("时间参数无法解析: start={}, end={}, 原因: {}", startDate, endDate, e.getMessage());
+            return OrdersByDateResult.fail(e.getMessage());
+        }
+        if (start.isAfter(end)) {
+            return OrdersByDateResult.fail("开始时间(" + startDate + ")晚于结束时间(" + endDate + ")，请调换后重新调用");
+        }
+        List<OrderSummary> orders = orderRepository
+                .findByUsernameAndOrderTimeBetween(username, start, end).stream()
                 .map(AssistantTools::toSummary)
                 .toList();
+        return OrdersByDateResult.ok(orders);
     }
 
     @Tool("查询销量最高的商品")
